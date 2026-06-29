@@ -241,6 +241,7 @@ body {
     <i class="ph-fill ph-drop"></i>
     <h2>HydroGIS<br><span style="font-weight:400; color:var(--text-muted); font-size:12px;">Pekanbaru Analytics</span></h2>
   </div>
+  <div id="alertBanner" style="display:none; margin-bottom:16px; padding:12px 14px; border-radius:10px; font-size:12px; font-weight:600; line-height:1.4; backdrop-filter:blur(8px);"></div>
 
   <div class="section">
     <h4><i class="ph ph-map-trifold"></i> Peta Dasar</h4>
@@ -293,7 +294,22 @@ body {
   </div>
 
   <div class="section">
+    <h4><i class="ph ph-drop-half"></i> Simulasi Genangan</h4>
+    <label><input type="checkbox" id="chkInundation" onchange="toggleInundation()"> Genangan Curah Hujan</label>
+    <div id="inundationControls" style="display:none; margin:10px 0 0 26px;">
+      <div style="display:flex; justify-content:space-between; font-size:11px; color:var(--text-muted); margin-bottom:4px;">
+        <span>10 mm</span>
+        <span id="inundLabel" style="color:var(--text-main); font-weight:600;">50 mm</span>
+        <span>500 mm</span>
+      </div>
+      <input type="range" id="inundSlider" min="10" max="500" value="50" oninput="updateInundation(+this.value)" style="width:100%; accent-color:var(--accent);">
+      <div class="hint" style="margin:0;">Area dengan cekungan &le; nilai slider akan tergenang biru.</div>
+    </div>
+  </div>
+
+  <div class="section">
     <h4><i class="ph ph-waves"></i> DAS Siak</h4>
+    <label><input type="checkbox" id="chkBuildings2D" onchange="toggleBuildings2D()"> Bangunan (OSM)</label>
     <label><input type="checkbox" id="chkCatch" onchange="toggleCatch()"> Batas Daerah Aliran</label>
     <label><input type="checkbox" id="chkSiak" onchange="toggleSiak()"> Analisis Muara (Rob)</label>
   </div>
@@ -351,6 +367,7 @@ body {
     <div style="width:1px; height:24px; background:var(--border-glass); margin:0 4px;"></div>
     <button onclick="toggleContour3D()" class="active" id="btnContour3D">Kontur</button>
     <button onclick="toggleHillshade()" class="active" id="btnHillshade">Hillshade</button>
+    <button onclick="toggleBuildings3D()" class="active" id="btnBuildings3D">Bangunan</button>
     <div style="width:1px; height:24px; background:var(--border-glass); margin:0 4px;"></div>
     <button onclick="changeExaggeration(-0.5)" title="Turunkan efek 3D"><i class="ph ph-minus"></i></button>
     <span id="exagLabel" style="color:var(--text-main); font-size:12px; font-weight:600; min-width:40px; text-align:center;">3.5x</span>
@@ -455,6 +472,25 @@ function toggleRisk() {
   updateLegend();
 }
 
+let buildingsLayer2D = null;
+
+function toggleBuildings2D() {
+  const s = document.getElementById('chkBuildings2D').checked;
+  if (s) {
+    if (!buildingsLayer2D) {
+      fetch('/data/pekanbaru_buildings.geojson').then(r => r.json()).then(d => {
+        buildingsLayer2D = L.geoJSON(d, {
+          style: { color: '#64748b', weight: 0.5, fillColor: '#94a3b8', fillOpacity: 0.4 }
+        }).addTo(topGroup);
+      }).catch(() => {});
+    } else if (!topGroup.hasLayer(buildingsLayer2D)) {
+      topGroup.addLayer(buildingsLayer2D);
+    }
+  } else {
+    if (buildingsLayer2D && topGroup.hasLayer(buildingsLayer2D)) topGroup.removeLayer(buildingsLayer2D);
+  }
+}
+
 function toggleCatch() {
   const s = document.getElementById('chkCatch').checked;
   if (s) { CatchLayer.addTo(map); if (!CatchLayer.getLayers().length) loadCatchment(); }
@@ -470,6 +506,26 @@ function loadCatchment() {
 function toggleSiak() {
   document.getElementById('siakPanel').style.display = document.getElementById('chkSiak').checked ? 'block' : 'none';
   if (document.getElementById('chkSiak').checked) loadSiakData();
+}
+
+let inundationTile = null;
+
+function toggleInundation() {
+  const s = document.getElementById('chkInundation').checked;
+  document.getElementById('inundationControls').style.display = s ? 'block' : 'none';
+  if (s) {
+    updateInundation(+document.getElementById('inundSlider').value);
+  } else {
+    if (inundationTile && baseGroup.hasLayer(inundationTile)) baseGroup.removeLayer(inundationTile);
+  }
+  updateLegend();
+}
+
+function updateInundation(mm) {
+  document.getElementById('inundLabel').textContent = mm + ' mm';
+  if (inundationTile && baseGroup.hasLayer(inundationTile)) baseGroup.removeLayer(inundationTile);
+  inundationTile = tileLayer(`/tiles/inundation/${mm}/{z}/{x}/{y}.png`, {opacity:0.75});
+  baseGroup.addLayer(inundationTile);
 }
 
 function loadSiakData() {
@@ -593,6 +649,14 @@ function updateLegend() {
       <div class="legend-labels"><span>Dangkal</span><span>Dalam</span></div>
     </div>`;
   }
+  if (document.getElementById('chkInundation').checked) {
+    const mm = document.getElementById('inundSlider').value;
+    html += `<div class="legend-item">
+      <h4>Simulasi Genangan (&le;${mm} mm)</h4>
+      <div style="height:8px; border-radius:4px; background:rgba(59,130,246,0.6);"></div>
+      <div class="legend-labels"><span>Cekungan tergenang</span></div>
+    </div>`;
+  }
   if (document.getElementById('chkRain').checked) {
     html += `<div class="legend-item">
       <h4>Intensitas Hujan (dBZ)</h4>
@@ -668,12 +732,6 @@ function open3D() {
           attribution: '&copy; OSM, CartoDB',
           maxzoom: 18
         },
-        hillshade: {
-          type: 'raster',
-          tiles: ['/tiles/hillshade/{z}/{x}/{y}.png'],
-          tileSize: 256,
-          maxzoom: 18
-        },
         'terrain-rgb': {
           type: 'raster-dem',
           tiles: ['/tiles/terrainrgb/{z}/{x}/{y}.png'],
@@ -738,6 +796,27 @@ function open3D() {
           });
         }
       }).catch(() => {});
+
+    fetch('/data/pekanbaru_buildings.geojson')
+      .then(r => r.json())
+      .then(data => {
+        if (!map3d.getSource('buildings')) {
+          map3d.addSource('buildings', { type: 'geojson', data: data });
+          map3d.addLayer({
+            id: 'buildings-layer',
+            type: 'fill-extrusion',
+            source: 'buildings',
+            paint: {
+              'fill-extrusion-color': ['case',
+                ['has', 'levels'], '#94a3b8',
+                '#64748b'],
+              'fill-extrusion-height': ['get', 'height'],
+              'fill-extrusion-base': 0,
+              'fill-extrusion-opacity': 0.7
+            }
+          }, 'contour-layer');
+        }
+      }).catch(() => {});
   });
   
   map3d.addControl(new maplibregl.NavigationControl(), 'top-right');
@@ -760,11 +839,28 @@ function toggleHillshade() {
     const vis = map3d.getLayoutProperty(id, 'visibility');
     const newVis = vis === 'none' ? 'visible' : 'none';
     map3d.setLayoutProperty(id, 'visibility', newVis);
-  } else if (map3d.getSource('hillshade')) {
-    map3d.addLayer({ id, type: 'raster', source: 'hillshade',
-      paint: { 'raster-opacity': 0.5 } }, 'contour-layer');
+  } else {
+    map3d.addLayer({
+      id: id,
+      type: 'hillshade',
+      source: 'terrain-rgb',
+      paint: {
+        'hillshade-illumination-direction': 315,
+        'hillshade-exaggeration': 0.8,
+        'hillshade-shadow-color': 'rgba(0, 0, 0, 0.8)',
+        'hillshade-highlight-color': 'rgba(255, 255, 255, 0.25)',
+        'hillshade-accent-color': 'rgb(30, 41, 59)'
+      }
+    }, 'contour-layer');
   }
   document.getElementById('btnHillshade').classList.toggle('active');
+}
+
+function toggleBuildings3D() {
+  const vis = map3d.getLayer('buildings-layer') ? map3d.getLayoutProperty('buildings-layer', 'visibility') : 'none';
+  const newVis = vis === 'none' ? 'visible' : 'none';
+  if (map3d.getLayer('buildings-layer')) map3d.setLayoutProperty('buildings-layer', 'visibility', newVis);
+  document.getElementById('btnBuildings3D').classList.toggle('active');
 }
 
 function changeExaggeration(delta) {
@@ -773,10 +869,30 @@ function changeExaggeration(delta) {
   if (map3d) map3d.setTerrain({ source: 'terrain-rgb', exaggeration: exagValue });
 }
 
+function checkWeatherAlert() {
+  fetch('/api/weather/alert').then(r=>r.json()).then(d => {
+    const banner = document.getElementById('alertBanner');
+    if (d.level === 'info') {
+      banner.style.cssText = 'display:block; background:rgba(16,185,129,0.2); border:1px solid rgba(16,185,129,0.3); color:#6ee7b7;';
+      banner.innerHTML = `<i class="ph-fill ph-check-circle" style="margin-right:6px;"></i> ${d.message}`;
+    } else if (d.level === 'warning') {
+      banner.style.cssText = 'display:block; background:rgba(234,179,8,0.15); border:1px solid rgba(234,179,8,0.3); color:#facc15;';
+      banner.innerHTML = `<i class="ph-fill ph-warning" style="margin-right:6px;"></i> ${d.message}`;
+    } else if (d.level === 'error') {
+      banner.style.cssText = 'display:block; background:rgba(239,68,68,0.2); border:1px solid rgba(239,68,68,0.3); color:#fca5a5;';
+      banner.innerHTML = `<i class="ph-fill ph-warning-circle" style="margin-right:6px;"></i> ${d.message}`;
+    } else {
+      banner.style.display = 'none';
+    }
+  }).catch(() => {});
+}
+
 // Init
 toggleContour();
 updateLegend();
-['chkFacc','chkSink','chkRain','chkDem','chkContour'].forEach(id => {
+checkWeatherAlert();
+setInterval(checkWeatherAlert, 60000);
+['chkFacc','chkSink','chkRain','chkDem','chkContour','chkInundation'].forEach(id => {
   document.getElementById(id).addEventListener('change', updateLegend);
 });
 </script>

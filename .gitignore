@@ -14,6 +14,12 @@ dem_sinkdiff_4326.tif
 static/terrain_rgb.tif
 static/terrain_tiles/
 
+# FlatGeobuf
+*.fgb
+
+# Runtime
+tile_cache.db
+
 # Raw GIS data
 RBI/
 pekanbaru_boundary/

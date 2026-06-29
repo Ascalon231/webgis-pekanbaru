@@ -10,125 +10,79 @@ DEMNAS Pekanbaru + BATNAS, dengan integrasi data curah hujan real-time.
 
 | Data | Sumber | Coverage | Resolusi | Ukuran |
 |------|--------|----------|----------|--------|
-| DEMNAS | BIG | 4 tiles (~101.25-101.75°E, 0.25-0.75°S) | ~8.3m | 172MB |
-| DEMNAS Pekanbaru | Clip administrasi | Batas Kota Pekanbaru | ~8.3m | 31MB |
+| DEMNAS Pekanbaru | BIG (clip) | Batas Kota Pekanbaru | ~8.3m | 31MB |
 | BATNAS | BIG | 100-105°E, 0-5°N | ~185m | 35MB |
-| Administrasi | BIG (514 kab/kota) | Nasional | - | 401MB |
-| Riau boundary | Clip 514 → 12 kab/kota | Provinsi Riau | - | 7.8MB |
-| Pekanbaru boundary | Clip 514 → 1 kota | Kota Pekanbaru | - | 186KB |
+| Pekanbaru boundary | BIG (clip) | Kota Pekanbaru | - | 186KB |
+| Bangunan | OSM | Kota Pekanbaru | - | ? |
+| Flow Accumulation | PySheds | Kota Pekanbaru | ~10m | 18MB |
+| Sink Difference | PySheds | Kota Pekanbaru | ~10m | 6.4MB |
 
-## Preprocessing Selesai
+## ✅ Sudah Selesai
 
-### DEM → UTM → Hidrologi (pysheds)
-- [x] Reproject DEM ke UTM 48N (EPSG:32648, resolusi 10m)
-- [x] Sink Fill → Flow Direction (D8) → Flow Accumulation
+### Preprocessing Hidrologi
+- [x] Reproject DEM ke UTM 48N → Sink Fill → Flow Direction → Flow Accumulation
 - [x] Stream network extraction (threshold 1000 cells)
-- [x] Catchment delineation (max accumulation pour point)
-- [x] Sink difference raster (genangan)
-- [x] Patch `np.in1d` → `np.isin` di pysheds untuk NumPy ≥1.25
+- [x] Catchment delineation + Sink difference raster
+- [x] Kontur 1m/5m/10m + simplify
+- [x] Analisis muara Siak (cross-section E-W/N-S)
 
-### Batas Administrasi
-- [x] Extract Riau (12 kab/kota) dari 514 kab/kota nasional
-- [x] Clip Pekanbaru dari Riau
+### Server (Flask) — Endpoint
+| Route | Fungsi |
+|-------|--------|
+| `/tiles/<layer>/<z>/<x>/<y>.png` | Raster tiles (dem, batnas, facc, sinkdiff) |
+| `/tiles/terrainrgb/<z>/<x>/<y>.png` | Mapbox Terrain-RGB on-the-fly |
+| `/tiles/contour/<interval>/<z>/<x>/<y>.png` | Kontur raster tiles |
+| `/tiles/risk/<z>/<x>/<y>.png` | Zona Risiko Banjir composite |
+| `/tiles/inundation/<mm>/<z>/<x>/<y>.png` | Simulasi genangan slider |
+| `/tiles/streams/<z>/<x>/<y>.png` | Sungai raster tiles (dari FlatGeobuf) |
+| `/api/elevation` | Query elevasi + flow acc |
+| `/api/risk-score` | Zona risiko + rekomendasi |
+| `/api/weather` | Proxy RainViewer (cache 120s) |
+| `/api/weather/alert` | Status peringatan dini |
+| `/api/siak` | Analisis muara Siak |
+| `/data/<filename>` | Serve GeoJSON/geojson |
 
-### Kontur
-- [x] Generate 3 interval: 1m, 5m, 10m dari DEMNAS Pekanbaru
-- [x] Simplify geometri (tolerance 0.0001°)
-- [x] Konversi ke raster tiles (PNG) — jauh lebih ringan dari GeoJSON langsung
+### Frontend — 2D Leaflet
+- [x] Layer: DEM, kontur (1/5/10m), aliran, sungai, genangan, risiko
+- [x] Simulasi genangan interaktif (slider 10-500mm)
+- [x] RainViewer animasi (play/pause/slider/forecast)
+- [x] Klik titik → info elevasi + akumulasi + zona risiko
+- [x] Legenda dinamis, toolbar, sidebar glassmorphism
+- [x] Flood early warning banner (auto-refresh 60s)
 
-### BATNAS — Analisis Muara Siak
-- [x] Cross-section E-W dan N-S
-- [x] Statistik kedalaman (min, max, mean)
-- [x] Lokasi muara: ~102.1°E, 1.1°N
+### Frontend — 3D MapLibre
+- [x] Terrain dari DEM (terrain-rgb, 4x exaggeration default)
+- [x] Hillshade native (`type: hillshade`, GPU-accelerated)
+- [x] Kontur overlay, Sungai (GeoJSON), Boundary
+- [x] Pencahayaan dinamis (shadow/highlight/accent color)
 
-## Server (Flask)
+### Optimasi & Code Quality
+- [x] SQLite persistent tile cache (ganti LRUCache in-memory)
+- [x] GeoJSON → FlatGeobuf (streams, contours) — zero persistent memory
+- [x] Hillshade server-side removed (pindah ke native MapLibre)
+- [x] Raw DEMNAS tiles dihapus (172MB freed)
+- [x] Contour GeoJSON dihapus (78MB freed)
+- [x] Nodata handling terrain-RGB: fill dengan elevasi minimum valid
 
-### Endpoint Berfungsi
-| Route | Method | Fungsi |
-|-------|--------|--------|
-| `/` | GET | Index page |
-| `/tiles/<layer>/<z>/<x>/<y>.png` | GET | Raster tiles (dem, batnas, hillshade, batnas_hillshade, facc, sinkdiff) |
-| `/tiles/contour/<interval>/<z>/<x>/<y>.png` | GET | Contour raster tiles (1m/5m/10m) |
-| `/tiles/risk/<z>/<x>/<y>.png` | GET | **NEW** Zona Risiko Banjir |
-| `/api/elevation` | GET | Query elevasi + flow acc di titik |
-| `/api/risk-score` | GET | **NEW** Zona risiko + rekomendasi di titik |
-| `/api/contours` | GET | Generate kontur on-demand (jarang dipakai) |
-| `/api/siak` | GET | Analisis muara Siak |
-| `/api/weather` | GET | **NEW** Proxy RainViewer (cache 120s) |
-| `/api/info` | GET | Info layer yang tersedia |
-| `/data/<filename>` | GET | Serve GeoJSON file |
+## 🚧 Dalam Pengerjaan / Rencana
 
-### Teknis
-- Flask threaded, port 5000
-- Tile cache in-memory (`TILE_CACHE`)
-- Contour via shapely STRtree + PIL rendering
-- RainViewer API cached 120 detik
-- Zona risiko: composite dari elevasi + flow acc + sink diff
+### 1. Bangunan OSM (✅ Selesai)
+- [x] Download 10.546 bangunan dari OpenStreetMap via Overpass API (quadrant query)
+- [x] Simpan sebagai `pekanbaru_buildings.geojson` (3.1MB) + FlatGeobuf (2.8MB)
+- [x] 3D MapLibre: `fill-extrusion` layer dengan height dari tag OSM
+- [x] 2D Leaflet: polygon overlay abu-abu semi-transparan (toggle di sidebar)
+- [x] Toggle bangunan di 3D viewer (tombol "Bangunan" di kontrol 3D)
 
-## Frontend (Leaflet)
+### 2. Infrastruktur Deploy (✅ Selesai)
+- [x] `requirements.txt` — semua dependency Python
+- [x] `Dockerfile` — base OSGeo ubuntu-small + Gunicorn (port 8080)
+- [x] `.gitignore` — tambah tile_cache.db
+- [ ] ⏳ Deploy ke Railway / Fly.io (manual — perlu akun + CLI)
 
-### Layer Tersedia
-| Layer | Tipe | Default |
-|-------|------|---------|
-| Basemap CartoDB Positron | Tile | ✅ |
-| Curah Hujan Real-time | RainViewer tile | ❌ |
-| Prakiraan Hujan 2 Jam | RainViewer tile | ❌ |
-| Kontur (1m/5m/10m) | Raster tile | ✅ 5m |
-| Aliran Air Hujan | Raster tile (facc) | ✅ |
-| Sungai | GeoJSON | ✅ |
-| Genangan | Raster tile (sinkdiff) | ❌ |
-| Zona Risiko | Raster tile (composite) | ❌ |
-| Wilayah Aliran Siak | GeoJSON | ❌ |
-| Analisis Muara | Panel | ❌ |
-
-### Fitur Tambahan
-- [x] Klik titik → info elevasi + akumulasi + zona risiko + rekomendasi
-- [x] Animasi curah hujan (play/pause/slider)
-- [x] Legenda dinamis per layer aktif
-- [x] Toolbar bawah untuk toggle cepat
-- [x] Tooltip pada hover batas administrasi
+### 3. (Future) Fitur Tambahan
+- [ ] Delineasi DAS on-demand (butuh regenerate flow direction)
+- [ ] Notifikasi Telegram untuk early warning
+- [ ] Legend untuk 3D viewer
 
 ---
 
-## Arsitektur
-
-```
-Browser (Leaflet) ←→ Flask Server ←→ Raster files (.tif)
-                         ↕
-                   RainViewer API
-                         ↕
-                   GeoJSON files
-```
-
-### Data Flow
-1. **Tiles**: Browser request `/{layer}/{z}/{x}/{y}.png` → Server baca raster window → colormap → PNG
-2. **Contour**: Server load GeoJSON + STRtree → query per tile → PIL render → PNG
-3. **Zona Risiko**: Server baca 3 raster → normalisasi → kombinasi bobot → classify → PNG
-4. **Weather**: Server proxy + cache RainViewer → browser animasi tile
-5. **Query**: Browser klik → Flask query raster di koordinat → return JSON
-
-### CRS Pipeline
-```
-DEMNAS (EPSG:4326, no CRS tag)
-  ├── force EPSG:4326 (gdalwarp -a_srs)
-  ├── reproject UTM 48N (pysheds)
-  │   ├── Sink Fill → Flow Dir → Flow Acc → Stream → Catchment
-  │   └── reproject EPSG:4326 (tile serving)
-  └── kontur (gdal_contour)
-      └── simplify → STRtree → raster tiles
-```
-
-## Known Issues
-1. `ADm.geojson` 401MB di root project — tidak dipakai, perlu dibersihkan
-2. `dem_fdir.tif`, `dem_filled.tif`, `dem_streams.tif` — file intermediate bisa dibersihkan
-3. Tile cache tidak terbatas — potensi memory leak pada uptime lama
-4. `serve_data` parsing ulang GeoJSON → perlu `send_file` untuk optimasi
-5. RainViewer max zoom 7 — pixelated di zoom tinggi, tapi masih usable
-
-## Next Steps
-1. ✅ Integrasi RainViewer untuk curah hujan real-time
-2. ✅ Zona risiko banjir (composite layer)
-3. ✅ UI ramah awam dengan legenda jelas
-4. ⏳ Deploy ke platform production
-5. ⏳ Optimasi cache (LRU/TTL)
-6. ⏳ Bersihkan file tidak terpakai

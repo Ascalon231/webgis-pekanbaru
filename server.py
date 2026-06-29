@@ -2,11 +2,12 @@ import math
 import io
 import json
 import os
+import sqlite3
 import struct
+import subprocess
 import time
 import urllib.request
 import threading
-from collections import OrderedDict
 
 import flask
 import numpy as np
@@ -17,30 +18,85 @@ from flask import Flask, request, Response
 from shapely.geometry import shape, box
 from shapely.strtree import STRtree
 
-class LRUCache:
-    def __init__(self, maxsize=4096):
-        self.cache = OrderedDict()
-        self.maxsize = maxsize
+class SQLiteCache:
+    MAX_ROWS = 10000
+    MAX_AGE = 7 * 86400
+
+    def __init__(self, db_path):
+        self.db_path = db_path
         self.lock = threading.Lock()
+        self._init_db()
+
+    def _conn(self):
+        conn = sqlite3.connect(self.db_path, timeout=10)
+        conn.execute('PRAGMA journal_mode=WAL')
+        conn.execute('PRAGMA synchronous=NORMAL')
+        return conn
+
+    def _init_db(self):
+        conn = self._conn()
+        try:
+            conn.execute('''CREATE TABLE IF NOT EXISTS tile_cache (
+                key TEXT PRIMARY KEY, data BLOB, hits INTEGER DEFAULT 0,
+                created_at REAL DEFAULT 0
+            )''')
+            cutoff = time.time() - self.MAX_AGE
+            conn.execute('DELETE FROM tile_cache WHERE created_at < ?', (cutoff,))
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _contains(self, key):
+        k = str(key)
+        conn = self._conn()
+        try:
+            row = conn.execute('SELECT 1 FROM tile_cache WHERE key=?', (k,)).fetchone()
+            return row is not None
+        finally:
+            conn.close()
+
+    def _get(self, key):
+        k = str(key)
+        conn = self._conn()
+        try:
+            row = conn.execute('SELECT data FROM tile_cache WHERE key=?', (k,)).fetchone()
+            if row is None:
+                raise KeyError(key)
+            conn.execute('UPDATE tile_cache SET hits=hits+1 WHERE key=?', (k,))
+            conn.commit()
+            return row[0]
+        finally:
+            conn.close()
+
+    def _set(self, key, value):
+        k = str(key)
+        conn = self._conn()
+        try:
+            now = time.time()
+            conn.execute('''INSERT OR REPLACE INTO tile_cache (key, data, hits, created_at)
+                VALUES (?, ?, COALESCE((SELECT hits FROM tile_cache WHERE key=?), 0) + 1, ?)''',
+                (k, value, k, now))
+            conn.commit()
+            row = conn.execute('SELECT COUNT(*) FROM tile_cache').fetchone()
+            if row[0] > self.MAX_ROWS:
+                conn.execute('''DELETE FROM tile_cache WHERE key IN (
+                    SELECT key FROM tile_cache ORDER BY hits ASC LIMIT ?)''',
+                    (row[0] - self.MAX_ROWS,))
+                conn.commit()
+        finally:
+            conn.close()
 
     def __contains__(self, key):
         with self.lock:
-            return key in self.cache
+            return self._contains(key)
 
     def __getitem__(self, key):
         with self.lock:
-            if key not in self.cache:
-                raise KeyError(key)
-            self.cache.move_to_end(key)
-            return self.cache[key]
+            return self._get(key)
 
     def __setitem__(self, key, value):
         with self.lock:
-            if key in self.cache:
-                self.cache.move_to_end(key)
-            self.cache[key] = value
-            if len(self.cache) > self.maxsize:
-                self.cache.popitem(last=False)
+            self._set(key, value)
 
 app = Flask(__name__)
 
@@ -55,49 +111,39 @@ SINKDIFF_FILE = os.path.join(DATA_DIR, 'dem_sinkdiff_4326.tif')
 PEKANBARU_DEM_BOUNDS = (101.32298, 0.42042, 101.60531, 0.69097)
 BATNAS_BOUNDS = (100.0, 0.0, 105.0, 5.0)
 
-TILE_CACHE = LRUCache(maxsize=4096)
+TILE_CACHE = SQLiteCache(os.path.join(DATA_DIR, 'tile_cache.db'))
 COLORMAP_CACHE = {}
-CONTOUR_CACHE = {}
-STREAMS_CACHE = None
 WEATHER_CACHE = {'data': None, 'time': 0}
 
 
-def load_contour_data(interval):
-    key = f'contour_{interval}'
-    if key in CONTOUR_CACHE:
-        return CONTOUR_CACHE[key]
-
-    fname = f'contours_{interval}_simple.geojson'
-    fpath = os.path.join(DATA_DIR, fname)
-    if not os.path.exists(fpath):
+def query_fgb_features(fgb_path, bbox):
+    if not os.path.exists(fgb_path):
         return None
-
-    with open(fpath) as f:
-        raw = json.load(f)
-
-    features = []
-    for feat in raw['features']:
-        elev = feat['properties'].get('elev', 0)
-        geom = shape(feat['geometry'])
-        features.append({'geom': geom, 'elev': elev})
-
-    tree = STRtree([f['geom'] for f in features])
-
-    CONTOUR_CACHE[key] = {'features': features, 'tree': tree}
-    return CONTOUR_CACHE[key]
+    try:
+        result = subprocess.run([
+            'ogr2ogr', '-f', 'GeoJSON', '-spat',
+            f'{bbox[0]:.6f}', f'{bbox[1]:.6f}', f'{bbox[2]:.6f}', f'{bbox[3]:.6f}',
+            '-spat_srs', 'EPSG:4326',
+            '/vsistdout/', fgb_path
+        ], capture_output=True, text=True, timeout=10)
+        if result.returncode != 0 or not result.stdout.strip():
+            return None
+        return json.loads(result.stdout)
+    except Exception:
+        return None
 
 
 def render_contour_tile(interval, z, x, y):
-    data = load_contour_data(interval)
-    if data is None:
-        return None
-
     lng_left, lat_bottom, lng_right, lat_top = tile_to_bounds(x, y, z)
     dx = (lng_right - lng_left) * 0.1
     dy = (lat_top - lat_bottom) * 0.1
-    qbox = box(lng_left - dx, lat_bottom - dy, lng_right + dx, lat_top + dy)
+    bbox = (lng_left - dx, lat_bottom - dy, lng_right + dx, lat_top + dy)
 
-    indices = data['tree'].query(qbox, predicate='intersects')
+    fname = f'contours_{interval}_simple.fgb'
+    fpath = os.path.join(DATA_DIR, fname)
+    raw = query_fgb_features(fpath, bbox)
+    if raw is None:
+        return None
 
     img = Image.new('RGBA', (256, 256), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
@@ -112,10 +158,9 @@ def render_contour_tile(interval, z, x, y):
         py = (yt * n - y) * ts
         return (px, py)
 
-    for idx in indices:
-        feat = data['features'][idx]
-        elev = feat['elev']
-        geom = feat['geom']
+    for feat in raw['features']:
+        elev = feat['properties'].get('elev', 0)
+        geom = shape(feat['geometry'])
         is_index = (elev % 25 == 0)
         color = (92, 58, 30, 230) if is_index else (166, 123, 91, 180)
         w = 3 if is_index else 1
@@ -193,33 +238,17 @@ def render_risk_tile(z, x, y):
     return Image.fromarray(rgba, 'RGBA')
 
 
-def load_streams_data():
-    global STREAMS_CACHE
-    if STREAMS_CACHE is not None:
-        return STREAMS_CACHE
-    fpath = os.path.join(DATA_DIR, 'streams.geojson')
-    if not os.path.exists(fpath):
-        return None
-    with open(fpath) as f:
-        raw = json.load(f)
-    features = []
-    for feat in raw['features']:
-        geom = shape(feat['geometry'])
-        features.append({'geom': geom})
-    tree = STRtree([f['geom'] for f in features])
-    STREAMS_CACHE = {'features': features, 'tree': tree}
-    return STREAMS_CACHE
-
-
 def render_streams_tile(z, x, y):
-    data = load_streams_data()
-    if data is None:
-        return None
     lng_left, lat_bottom, lng_right, lat_top = tile_to_bounds(x, y, z)
     dx = (lng_right - lng_left) * 0.1
     dy = (lat_top - lat_bottom) * 0.1
-    qbox = box(lng_left - dx, lat_bottom - dy, lng_right + dx, lat_top + dy)
-    indices = data['tree'].query(qbox, predicate='intersects')
+    bbox = (lng_left - dx, lat_bottom - dy, lng_right + dx, lat_top + dy)
+
+    fpath = os.path.join(DATA_DIR, 'streams.fgb')
+    raw = query_fgb_features(fpath, bbox)
+    if raw is None:
+        return None
+
     img = Image.new('RGBA', (256, 256), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
     n = 2.0 ** z; ts = 256.0
@@ -227,8 +256,8 @@ def render_streams_tile(z, x, y):
         xt = (lng + 180.0) / 360.0
         yt = (1.0 - math.asinh(math.tan(math.radians(lat))) / math.pi) / 2.0
         return ((xt * n - x) * ts, (yt * n - y) * ts)
-    for idx in indices:
-        geom = data['features'][idx]['geom']
+    for feat in raw['features']:
+        geom = shape(feat['geometry'])
         polygons = []
         if geom.geom_type == 'Polygon':
             polygons.append(geom)
@@ -297,17 +326,6 @@ def apply_colormap(data, cmap_name='terrain', vmin=None, vmax=None, flip=False):
     return colors[indices]
 
 
-def hillshade(data, az=315, alt=45):
-    dx = np.gradient(data, axis=1)
-    dy = np.gradient(data, axis=0)
-    az_rad = np.radians(360 - az)
-    alt_rad = np.radians(alt)
-    shaded = np.sin(alt_rad) * np.ones_like(data)
-    shaded -= np.cos(alt_rad) * (np.sin(az_rad) * dx + np.cos(az_rad) * dy)
-    shaded = np.clip(shaded, 0, 1)
-    return (shaded * 255).astype(np.uint8)
-
-
 def read_raster_window(filepath, left, bottom, right, top, out_shape=(256, 256)):
     with rasterio.open(filepath) as src:
         try:
@@ -358,26 +376,6 @@ def render_tile(layer, z, x, y):
         rgba = np.concatenate([colored, alpha[:, :, np.newaxis]], axis=2)
         return Image.fromarray(rgba, 'RGBA')
 
-    elif layer == 'hillshade':
-        data = read_raster_window(DEM_FILE, lng_left, lat_bottom, lng_right, lat_top, out_shape=(128, 128))
-        if data is None or np.all(np.isnan(data)):
-            return None
-        filled = np.nan_to_num(data, nan=0)
-        shaded = hillshade(filled)
-        alpha = np.where(np.isnan(data), 0, 200).astype(np.uint8)
-        rgba = np.concatenate([np.stack([shaded] * 3, axis=2), alpha[:, :, np.newaxis]], axis=2)
-        return Image.fromarray(rgba, 'RGBA')
-
-    elif layer == 'batnas_hillshade':
-        data = read_raster_window(BATNAS_FILE, lng_left, lat_bottom, lng_right, lat_top, out_shape=(128, 128))
-        if data is None or np.all(np.isnan(data)):
-            return None
-        filled = np.nan_to_num(data, nan=0)
-        shaded = hillshade(filled)
-        alpha = np.where(np.isnan(data), 0, 180).astype(np.uint8)
-        rgba = np.concatenate([np.stack([shaded] * 3, axis=2), alpha[:, :, np.newaxis]], axis=2)
-        return Image.fromarray(rgba, 'RGBA')
-
     elif layer == 'facc':
         if not os.path.exists(FACC_FILE):
             return None
@@ -414,7 +412,9 @@ def serve_terrain_rgb(z, x, y):
     if data is None or np.all(np.isnan(data)):
         return Response(status=204)
 
-    data = np.nan_to_num(data, nan=0)
+    valid_min = np.nanmin(data) if not np.all(np.isnan(data)) else 0
+    data = np.nan_to_num(data, nan=valid_min)
+    data = np.clip(data, -10, 200)
     encoded = ((data + 10000) / 0.1).astype(np.int32)
     R = np.floor(encoded / 65536).astype(np.uint8)
     G = np.floor((encoded % 65536) / 256).astype(np.uint8)
@@ -436,7 +436,7 @@ def serve_terrain_rgb(z, x, y):
 
 @app.route('/tiles/<layer>/<int:z>/<int:x>/<int:y>.png')
 def serve_tile(layer, z, x, y):
-    allowed = ('dem', 'batnas', 'hillshade', 'batnas_hillshade', 'facc', 'sinkdiff')
+    allowed = ('dem', 'batnas', 'facc', 'sinkdiff')
     if layer not in allowed:
         return 'Invalid layer', 404
     cache_key = (layer, z, x, y)
@@ -504,6 +504,44 @@ def serve_streams_tile(z, x, y):
     return Response(png_data, mimetype='image/png')
 
 
+def render_inundation_tile(mm, z, x, y):
+    lng_left, lat_bottom, lng_right, lat_top = tile_to_bounds(x, y, z)
+    data = read_raster_window(SINKDIFF_FILE, lng_left, lat_bottom, lng_right, lat_top)
+    if data is None or np.all(np.isnan(data)):
+        return None
+
+    flooded = (data > 0.01) & (data <= mm)
+    if not np.any(flooded):
+        return None
+
+    depth_ratio = np.clip(data / mm, 0, 1)
+    alpha = np.where(flooded, (40 + depth_ratio * 160).astype(np.uint8), 0)
+
+    h, w = data.shape
+    rgba = np.zeros((h, w, 4), dtype=np.uint8)
+    rgba[:,:,0] = 59
+    rgba[:,:,1] = 130
+    rgba[:,:,2] = 246
+    rgba[:,:,3] = alpha
+    rgba[:,:,3][np.isnan(data)] = 0
+    return Image.fromarray(rgba, 'RGBA')
+
+
+@app.route('/tiles/inundation/<int:mm>/<int:z>/<int:x>/<int:y>.png')
+def serve_inundation_tile(mm, z, x, y):
+    mm = max(10, min(500, mm))
+    cache_key = ('inundation', mm, z, x, y)
+    if cache_key in TILE_CACHE:
+        return Response(TILE_CACHE[cache_key], mimetype='image/png')
+    img = render_inundation_tile(mm, z, x, y)
+    if img is None:
+        return Response(status=204)
+    buf = io.BytesIO(); img.save(buf, format='PNG')
+    png_data = buf.getvalue()
+    TILE_CACHE[cache_key] = png_data
+    return Response(png_data, mimetype='image/png')
+
+
 @app.route('/api/weather')
 def weather_proxy():
     now = time.time()
@@ -529,6 +567,49 @@ def weather_proxy():
         return flask.jsonify(result)
     except Exception as e:
         return {'error': str(e)}, 502
+
+
+@app.route('/api/weather/alert')
+def weather_alert():
+    wc = WEATHER_CACHE
+    if not wc['data']:
+        return flask.jsonify({'status': 'unknown', 'message': 'Data radar belum tersedia'})
+    try:
+        frames = wc['data']['frames']
+        now = time.time()
+        latest = frames[-1]['time'] if frames else 0
+        age = now - latest
+        has_forecast = any(f.get('path', '').startswith('/') for f in frames[-6:])
+
+        if age < 600:
+            status = 'active'
+            msg = 'Data radar real-time tersedia'
+            level = 'info'
+        elif has_forecast:
+            status = 'forecast'
+            msg = 'Prakiraan hujan 2 jam ke depan aktif'
+            level = 'warning'
+        elif age < 3600:
+            status = 'stale'
+            msg = f'Data radar {int(age//60)} menit lalu'
+            level = 'warning'
+        else:
+            status = 'old'
+            msg = 'Data radar mungkin kedaluwarsa'
+            level = 'error'
+
+        intense = any(
+            f.get('time', 0) > now - 3600
+            for f in wc['data'].get('radar', {}).get('past', [])
+        ) if 'radar' in wc['data'] else False
+
+        return flask.jsonify({
+            'status': status, 'message': msg, 'level': level,
+            'latest_frame_age': round(age),
+            'total_frames': len(frames),
+        })
+    except Exception as e:
+        return flask.jsonify({'status': 'error', 'message': str(e), 'level': 'error'})
 
 
 @app.route('/api/risk-score')
@@ -676,7 +757,7 @@ def generate_contours():
         return {'error': 'bounds must be west,south,east,north'}, 400
     west, south, east, north = map(float, parts)
 
-    import subprocess, tempfile
+    import tempfile
     tmp_dir = tempfile.mkdtemp()
     try:
         crop_path = os.path.join(tmp_dir, 'crop.tif')
@@ -781,13 +862,13 @@ def layer_info():
                 'bounds': [src.bounds.left, src.bounds.bottom, src.bounds.right, src.bounds.top],
                 'description': 'Flow Accumulation from DEMNAS'
             }
-    if os.path.exists(os.path.join(DATA_DIR, 'contours_1m_simple.geojson')):
+    if os.path.exists(os.path.join(DATA_DIR, 'contours_1m_simple.fgb')):
         info['contours'] = {
             'available_intervals': [1, 5, 10],
             'files': {
-                '1m': 'contours_1m_simple.geojson',
-                '5m': 'contours_5m_simple.geojson',
-                '10m': 'contours_10m_simple.geojson',
+                '1m': 'contours_1m_simple.fgb',
+                '5m': 'contours_5m_simple.fgb',
+                '10m': 'contours_10m_simple.fgb',
             }
         }
     return flask.jsonify(info)
