@@ -1,0 +1,36 @@
+# Data raster
+*.tif
+*.tif.aux.xml
+
+# Vector besar
+streams.geojson
+contours_1m_simple.geojson
+contours_5m_simple.geojson
+contours_10m_simple.geojson
+dem_facc_4326.tif
+dem_sinkdiff_4326.tif
+
+# Generated tiles
+static/terrain_rgb.tif
+static/terrain_tiles/
+
+# Raw GIS data
+RBI/
+pekanbaru_boundary/
+Pekanbaru ADm.qmd
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Env
+*.env
