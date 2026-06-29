@@ -4,8 +4,10 @@ RUN apt-get update && apt-get install -y python3-pip python3-venv && rm -rf /var
 
 WORKDIR /app
 COPY requirements.txt .
-RUN pip3 install --no-cache-dir -r requirements.txt
+RUN python3 -m venv /venv && \
+    /venv/bin/pip install --no-cache-dir -r requirements.txt
 
 COPY . .
+ENV PATH="/venv/bin:$PATH"
 EXPOSE 8080
-CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "2", "--worker-class", "gevent", "server:app"]
+CMD ["/venv/bin/gunicorn", "--bind", "0.0.0.0:8080", "--workers", "2", "--worker-class", "gevent", "server:app"]
