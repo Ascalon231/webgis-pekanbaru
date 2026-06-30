@@ -1,21 +1,15 @@
-# Data raster
-*.tif
+# Sidecar raster metadata
 *.tif.aux.xml
 
-# Vector besar
+# GeoJSON sumber besar (sudah pakai FlatGeobuf)
 streams.geojson
 contours_1m_simple.geojson
 contours_5m_simple.geojson
 contours_10m_simple.geojson
-dem_facc_4326.tif
-dem_sinkdiff_4326.tif
 
 # Generated tiles
 static/terrain_rgb.tif
 static/terrain_tiles/
-
-# FlatGeobuf
-*.fgb
 
 # Runtime
 tile_cache.db
