@@ -192,6 +192,7 @@ body {
   align-items: center; gap: 12px; backdrop-filter: blur(10px);
   border: 1px solid var(--border-glass); box-shadow: 0 10px 30px rgba(0,0,0,0.5);
 }
+#loadingApp { display: flex; }
 .spinner {
   width: 20px; height: 20px; border: 3px solid rgba(255,255,255,0.1);
   border-radius: 50%; border-top-color: var(--accent);
@@ -234,6 +235,15 @@ body {
 <body>
 
 <div id="map"></div>
+
+<div class="loading-overlay" id="loadingApp">
+  <div class="spinner"></div>
+  <div style="display:flex;flex-direction:column;align-items:center;gap:4px;">
+    <span>Memuat Aplikasi...</span>
+    <span style="font-size:11px;color:var(--text-muted);font-weight:400;" id="loadingStatus">In Progress</span>
+  </div>
+</div>
+
 <div class="loading-overlay" id="loading"><div class="spinner"></div> Menganalisis Area...</div>
 
 <div class="glass-panel sidebar" id="sidebar">
@@ -366,11 +376,11 @@ body {
     <button onclick="map3d.easeTo({pitch:0, bearing:0, duration:800})">Atas 2D</button>
     <div style="width:1px; height:24px; background:var(--border-glass); margin:0 4px;"></div>
     <button onclick="toggleContour3D()" class="active" id="btnContour3D">Kontur</button>
-    <button onclick="toggleHillshade()" class="active" id="btnHillshade">Hillshade</button>
+    <button onclick="toggleHillshade()" id="btnHillshade">Hillshade</button>
     <button onclick="toggleBuildings3D()" class="active" id="btnBuildings3D">Bangunan</button>
     <div style="width:1px; height:24px; background:var(--border-glass); margin:0 4px;"></div>
     <button onclick="changeExaggeration(-0.5)" title="Turunkan efek 3D"><i class="ph ph-minus"></i></button>
-    <span id="exagLabel" style="color:var(--text-main); font-size:12px; font-weight:600; min-width:40px; text-align:center;">3.5x</span>
+    <span id="exagLabel" style="color:var(--text-main); font-size:12px; font-weight:600; min-width:40px; text-align:center;">4.0x</span>
     <button onclick="changeExaggeration(0.5)" title="Tingkatkan efek 3D"><i class="ph ph-plus"></i></button>
   </div>
 </div>
@@ -767,19 +777,19 @@ function open3D() {
       paint: { 'raster-opacity': 0.85 }
     });
 
-    fetch('/data/streams.geojson')
-      .then(r => r.json())
-      .then(data => {
-        if (!map3d.getSource('streams')) {
-          map3d.addSource('streams', { type: 'geojson', data: data });
-          map3d.addLayer({
-            id: 'streams-layer',
-            type: 'line',
-            source: 'streams',
-            paint: { 'line-color': '#2b83ba', 'line-width': 1.5, 'line-opacity': 0.7 }
-          });
-        }
-      }).catch(() => {});
+    map3d.addSource('streams-tiles', {
+      type: 'raster',
+      tiles: ['/tiles/streams/{z}/{x}/{y}.png'],
+      tileSize: 256,
+      minzoom: 10,
+      maxzoom: 18
+    });
+    map3d.addLayer({
+      id: 'streams-layer',
+      type: 'raster',
+      source: 'streams-tiles',
+      paint: { 'raster-opacity': 0.7 }
+    });
 
     fetch('/data/pekanbaru_boundary.geojson')
       .then(r => r.json())
@@ -808,13 +818,16 @@ function open3D() {
             source: 'buildings',
             paint: {
               'fill-extrusion-color': ['case',
-                ['has', 'levels'], '#94a3b8',
-                '#64748b'],
-              'fill-extrusion-height': ['get', 'height'],
+                ['has', 'levels'], '#cbd5e1',
+                '#94a3b8'],
+              'fill-extrusion-height': ['coalesce',
+                ['get', 'height'],
+                ['*', ['coalesce', ['get', 'levels'], 1], 3],
+                3],
               'fill-extrusion-base': 0,
-              'fill-extrusion-opacity': 0.7
+              'fill-extrusion-opacity': 0.85
             }
-          }, 'contour-layer');
+          });
         }
       }).catch(() => {});
   });
@@ -895,6 +908,17 @@ setInterval(checkWeatherAlert, 60000);
 ['chkFacc','chkSink','chkRain','chkDem','chkContour','chkInundation'].forEach(id => {
   document.getElementById(id).addEventListener('change', updateLegend);
 });
+
+// Sembunyikan loading setelah aplikasi siap
+setTimeout(() => {
+  const el = document.getElementById('loadingApp');
+  if (el) {
+    el.style.transition = 'opacity 0.5s ease, transform 0.5s ease';
+    el.style.opacity = '0';
+    el.style.transform = 'translate(-50%,-50%) scale(0.95)';
+    setTimeout(() => { el.style.display = 'none'; }, 500);
+  }
+}, 800);
 </script>
 </body>
 </html>

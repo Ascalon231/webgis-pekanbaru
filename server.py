@@ -892,4 +892,12 @@ def index():
 
 
 if __name__ == '__main__':
+    import sys
+    if not os.path.exists(DEM_FILE):
+        print(f'WARN: DEM file not found: {DEM_FILE}', file=sys.stderr)
+        print('TERRAIN AKAN RATA. Letakkan DEMNAS_Pekanbaru.tif di project root.', file=sys.stderr)
+    if not os.path.exists(FACC_FILE):
+        print(f'WARN: FACC file not found: {FACC_FILE}', file=sys.stderr)
+    if not os.path.exists(SINKDIFF_FILE):
+        print(f'WARN: SINKDIFF file not found: {SINKDIFF_FILE}', file=sys.stderr)
     app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)
