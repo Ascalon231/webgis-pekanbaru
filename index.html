@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WebGIS Hidrologi Pekanbaru — Static (PMTiles)</title>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script src="https://unpkg.com/pmtiles@4.1.0/dist/pmtiles.js"></script>
+<style>
+:root {
+  --bg-glass: rgba(15, 23, 42, 0.7);
+  --bg-glass-hover: rgba(30, 41, 59, 0.9);
+  --border-glass: rgba(255, 255, 255, 0.09);
+  --accent: #3b82f6;
+  --text-main: #f8fafc;
+  --text-muted: #94a3b8;
+  --radius: 14px;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family:'Plus Jakarta Sans',sans-serif; background:#0f172a; color:var(--text-main); overflow:hidden; }
+#map { position:absolute; inset:0; }
+::-webkit-scrollbar { width:5px; height:5px; }
+::-webkit-scrollbar-thumb { background:rgba(255,255,255,.2); border-radius:10px; }
+
+.glass {
+  position:absolute; z-index:10; background:var(--bg-glass);
+  backdrop-filter:blur(16px) saturate(180%); -webkit-backdrop-filter:blur(16px) saturate(180%);
+  border:1px solid var(--border-glass); border-radius:var(--radius);
+  box-shadow:0 10px 40px -10px rgba(0,0,0,.5);
+}
+
+/* Sidebar */
+#sidebar { top:16px; left:16px; width:280px; max-height:calc(100vh - 32px); overflow-y:auto; padding:16px; }
+.sidebar-header { display:flex; align-items:center; gap:10px; padding-bottom:12px; margin-bottom:14px; border-bottom:1px solid var(--border-glass); }
+.sidebar-header h2 { font-size:15px; font-weight:700; line-height:1.2; }
+.section { background:rgba(255,255,255,.03); padding:12px; border-radius:10px; border:1px solid rgba(255,255,255,.04); margin-bottom:12px; }
+.section:last-child { margin-bottom:0; }
+.section h4 { font-size:13px; margin-bottom:10px; font-weight:600; color:var(--text-main); }
+.sidebar label { display:flex; align-items:center; gap:9px; padding:5px 0; cursor:pointer; color:#cbd5e1; font-size:13px; font-weight:500; }
+.sidebar input[type="checkbox"] { appearance:none; width:16px; height:16px; border:2px solid var(--text-muted); border-radius:4px; cursor:pointer; position:relative; flex:none; }
+.sidebar input[type="checkbox"]:checked { background:var(--accent); border-color:var(--accent); }
+.sidebar input[type="checkbox"]:checked::after { content:'✔'; position:absolute; top:-2px; left:2px; color:#fff; font-size:10px; font-weight:bold; }
+.hint { font-size:11px; color:var(--text-muted); margin:2px 0 8px 25px; line-height:1.4; }
+.radio-row { display:flex; gap:8px; margin:8px 0 4px 25px; flex-wrap:wrap; }
+.radio-row button {
+  background:rgba(0,0,0,.25); color:var(--text-muted); border:1px solid var(--border-glass);
+  border-radius:100px; padding:5px 12px; cursor:pointer; font-family:inherit; font-size:11px; font-weight:600; transition:.2s;
+}
+.radio-row button.active { background:rgba(59,130,246,.2); color:var(--accent); border-color:rgba(59,130,246,.4); }
+input[type=range] { width:100%; accent-color:var(--accent); margin:8px 0 4px; }
+.legend-grid { display:grid; grid-template-columns:1fr 1fr; gap:6px; margin:8px 0 0 25px; }
+.legend-grid span { padding:4px 0; border-radius:4px; color:#fff; text-align:center; font-size:11px; font-weight:600; }
+
+/* Banner */
+#alertBanner { display:none; margin-bottom:12px; padding:10px 12px; border-radius:10px; font-size:12px; font-weight:600; line-height:1.4; }
+
+/* Right panel */
+#infoPanel { top:16px; right:16px; min-width:250px; max-width:290px; padding:16px; display:none; }
+.panel-title { font-size:13px; font-weight:600; margin-bottom:12px; padding-bottom:8px; border-bottom:1px solid var(--border-glass); }
+#infoPanel .row { display:flex; justify-content:space-between; padding:7px 0; border-bottom:1px dashed rgba(255,255,255,.1); font-size:12.5px; }
+#infoPanel .label { color:var(--text-muted); }
+#infoPanel .value { font-weight:600; }
+.zone-badge { padding:10px; border-radius:8px; color:#fff; font-weight:700; font-size:13px; text-align:center; margin:12px 0 8px; text-transform:uppercase; letter-spacing:.5px; }
+.rekom { background:rgba(0,0,0,.3); border-radius:8px; padding:10px; font-size:11.5px; color:#cbd5e1; line-height:1.6; }
+
+/* Bottom toolbar */
+#toolbar { bottom:20px; left:50%; transform:translateX(-50%); display:flex; padding:8px; gap:6px; border-radius:100px; }
+#toolbar button { padding:9px 16px; border:1px solid transparent; background:transparent; color:var(--text-muted); border-radius:100px; cursor:pointer; font-family:inherit; font-size:12.5px; font-weight:600; transition:.3s; }
+#toolbar button:hover { background:rgba(255,255,255,.06); color:var(--text-main); }
+#toolbar button.active { background:rgba(59,130,246,.18); color:var(--accent); border-color:rgba(59,130,246,.35); }
+
+/* Legend */
+#legendBox { bottom:90px; right:16px; min-width:210px; padding:14px; display:none; }
+.legend-item { margin-bottom:12px; }
+.legend-item:last-child { margin-bottom:0; }
+.legend-item h4 { font-size:11.5px; margin-bottom:6px; font-weight:600; }
+.legend-bar { height:8px; border-radius:4px; margin:4px 0; }
+.legend-labels { display:flex; justify-content:space-between; font-size:10px; color:var(--text-muted); }
+
+/* Rain controls */
+#rainControls { display:none; margin:8px 0 0 25px; background:rgba(0,0,0,.2); padding:10px; border-radius:8px; }
+#rainControls button { background:var(--accent); color:#fff; border:none; border-radius:6px; padding:6px 12px; cursor:pointer; font-size:11px; font-weight:600; font-family:inherit; }
+#rainControls input[type=range] { margin:10px 0 4px; }
+
+.maplibregl-ctrl-attrib { background:rgba(0,0,0,.5) !important; color:var(--text-muted) !important; font-size:10px; }
+.maplibregl-ctrl-group { background:var(--bg-glass) !important; backdrop-filter:blur(10px); }
+.maplibregl-ctrl-group button { filter:invert(1); }
+</style>
+</head>
+<body>
+<div id="map"></div>
+
+<div class="glass" id="sidebar">
+  <div class="sidebar-header">
+    <h2>HydroGIS<br><span style="font-weight:400;color:var(--text-muted);font-size:12px;">Pekanbaru Analytics · Static</span></h2>
+  </div>
+  <div id="alertBanner"></div>
+
+  <div class="section">
+    <h4>Peta Dasar</h4>
+    <div class="radio-row" id="basemapRow" style="margin-left:0;">
+      <button class="active" data-bm="dark">Dark</button>
+      <button data-bm="light">Light</button>
+      <button data-bm="satellite">Satelit</button>
+    </div>
+  </div>
+
+  <div class="section">
+    <h4>Cuaca &amp; Hujan</h4>
+    <label><input type="checkbox" id="chkRain"> Radar Hujan Langsung</label>
+    <div id="rainControls">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+        <button id="btnPlay">▶ Putar</button>
+        <span id="rainTime" style="font-size:12px;font-weight:600;">-</span>
+      </div>
+      <input type="range" id="rainSlider" min="0" max="1" value="0">
+      <label style="font-size:11px;margin:0;"><input type="checkbox" id="chkForecast" checked style="margin-right:5px;"> Prakiraan 2 Jam</label>
+    </div>
+  </div>
+
+  <div class="section">
+    <h4>Topografi</h4>
+    <label><input type="checkbox" id="chkDem" checked> Peta Elevasi (DEM)</label>
+    <label><input type="checkbox" id="chkContour" checked> Garis Kontur</label>
+    <div class="radio-row" id="contourRow">
+      <button class="active" data-c="5m">5m</button>
+      <button data-c="10m">10m</button>
+    </div>
+  </div>
+
+  <div class="section">
+    <h4>Analisis Banjir</h4>
+    <label><input type="checkbox" id="chkFacc" checked> Akumulasi Aliran</label>
+    <label><input type="checkbox" id="chkStreams" checked> Jaringan Sungai</label>
+    <label><input type="checkbox" id="chkSink"> Potensi Genangan</label>
+    <label><input type="checkbox" id="chkRisk"> Zona Risiko Banjir</label>
+    <div class="legend-grid" id="riskLegend" style="display:none;">
+      <span style="background:#10b981">Aman</span>
+      <span style="background:#eab308;color:#000">Waspada</span>
+      <span style="background:#f97316">Siaga</span>
+      <span style="background:#ef4444">Bahaya</span>
+    </div>
+  </div>
+
+  <div class="section">
+    <h4>Simulasi Genangan</h4>
+    <label><input type="checkbox" id="chkInund"> Genangan Curah Hujan</label>
+    <div id="inundControls" style="display:none;margin:6px 0 0 25px;">
+      <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text-muted);margin-bottom:2px;">
+        <span>50mm</span><span id="inundLabel" style="color:var(--text-main);font-weight:600;">100mm</span><span>400mm</span>
+      </div>
+      <input type="range" id="inundSlider" min="0" max="3" value="1">
+    </div>
+  </div>
+
+  <div class="section">
+    <h4>DAS Siak &amp; Bangunan</h4>
+    <label><input type="checkbox" id="chkBuildings" checked> Bangunan (3D)</label>
+    <label><input type="checkbox" id="chkCatch"> Batas DAS</label>
+    <label><input type="checkbox" id="chkBoundary" checked> Batas Kota</label>
+  </div>
+</div>
+
+<div class="glass" id="infoPanel">
+  <div class="panel-title">📌 Detail Lokasi</div>
+  <div id="infoContent"></div>
+</div>
+
+<div class="glass" id="legendBox">
+  <div class="panel-title" style="font-size:12.5px;margin-bottom:10px;">Legenda Peta</div>
+  <div id="legendBody"></div>
+</div>
+
+<div class="glass" id="toolbar">
+  <button onclick="document.getElementById('sidebar').style.display = (document.getElementById('sidebar').style.display==='none'?'block':'none')">☰ Menu</button>
+  <button onclick="toggle2D3D()" id="btn3d">🏔 3D Terrain</button>
+  <button onclick="map.fitBounds([[0.42,101.32],[0.69,101.61]])">⛶ Pekanbaru</button>
+</div>
+
+<script>
+// ---------- PMTiles protocol ----------
+let protocol = new pmtiles.Protocol();
+maplibregl.addProtocol('pmtiles', protocol.tile);
+
+// Resolve PMTiles relative to current page location (works on GH Pages & localhost)
+function pmt(rel) {
+  const abs = new URL(rel, window.location.href).href;
+  return 'pmtiles://' + abs;
+}
+const T = {
+  dem_color: pmt('tiles/dem_color.pmtiles'),
+  terrain_rgb: pmt('tiles/terrain_rgb.pmtiles'),
+  facc: pmt('tiles/facc.pmtiles'),
+  sinkdiff: pmt('tiles/sinkdiff.pmtiles'),
+  risk: pmt('tiles/risk.pmtiles'),
+  inund: [0,1,2,3].map(i => pmt(`tiles/inund_${[50,100,200,400][i]}.pmtiles`)),
+  boundary: pmt('tiles/boundary.pmtiles'),
+  catchment: pmt('tiles/catchment.pmtiles'),
+  buildings: pmt('tiles/buildings.pmtiles'),
+  contours: { '5m': pmt('tiles/contours_5m.pmtiles'), '10m': pmt('tiles/contours_10m.pmtiles') },
+};
+
+const BASEMAPS = {
+  dark: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+  light: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
+  satellite: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+};
+
+const map = new maplibregl.Map({
+  container: 'map',
+  style: {
+    version: 8,
+    sources: {
+      basemap: { type: 'raster', tiles: [BASEMAPS.dark], tileSize: 256, attribution: '© OSM · CartoDB' },
+      dem_color: { type: 'raster', url: T.dem_color, tileSize: 256, attribution: 'DEMNAS BIG' },
+      terrain_rgb: { type: 'raster-dem', url: T.terrain_rgb, tileSize: 256, encoding: 'mapbox', attribution: 'DEMNAS BIG' },
+      facc: { type: 'raster', url: T.facc, tileSize: 256 },
+      sinkdiff: { type: 'raster', url: T.sinkdiff, tileSize: 256 },
+      risk: { type: 'raster', url: T.risk, tileSize: 256 },
+      inund_0: { type: 'raster', url: T.inund[0], tileSize: 256 },
+      inund_1: { type: 'raster', url: T.inund[1], tileSize: 256 },
+      inund_2: { type: 'raster', url: T.inund[2], tileSize: 256 },
+      inund_3: { type: 'raster', url: T.inund[3], tileSize: 256 },
+      boundary: { type: 'vector', url: T.boundary },
+      catchment: { type: 'vector', url: T.catchment },
+      buildings: { type: 'vector', url: T.buildings },
+      streams: { type: 'vector', url: T.streams },
+      contours: { type: 'vector', url: T.contours['5m'] },
+    },
+    layers: [
+      { id: 'basemap-layer', type: 'raster', source: 'basemap' },
+      { id: 'boundary-line', type: 'line', source: 'boundary', layout: { visibility: 'visible' },
+        paint: { 'line-color': '#34d399', 'line-width': 2, 'line-opacity': 0.55 } },
+      { id: 'boundary-fill', type: 'fill', source: 'boundary', layout: { visibility: 'visible' },
+        paint: { 'fill-color': '#34d399', 'fill-opacity': 0.04 } },
+      { id: 'catchment-fill', type: 'fill', source: 'catchment', layout: { visibility: 'none' },
+        paint: { 'fill-color': '#10b981', 'fill-opacity': 0.12 } },
+      { id: 'catchment-line', type: 'line', source: 'catchment', layout: { visibility: 'none' },
+        paint: { 'line-color': '#10b981', 'line-width': 2, 'line-opacity': 0.7 } },
+      { id: 'dem-layer', type: 'raster', source: 'dem_color', layout: { visibility: 'visible' },
+        paint: { 'raster-opacity': 0.72 } },
+      { id: 'contour-layer', type: 'line', source: 'contours', layout: { visibility: 'visible' },
+        paint: {
+          'line-color': ['case', ['==', ['%', ['get', 'elev'], 25], 0], '#5c3a1e', '#a67b5b'],
+          'line-width': ['case', ['==', ['%', ['get', 'elev'], 25], 0], 1.6, 0.8],
+          'line-opacity': 0.85,
+        } },
+      { id: 'facc-layer', type: 'raster', source: 'facc', layout: { visibility: 'visible' },
+        paint: { 'raster-opacity': 0.55 } },
+      { id: 'sinkdiff-layer', type: 'raster', source: 'sinkdiff', layout: { visibility: 'none' },
+        paint: { 'raster-opacity': 0.6 } },
+      { id: 'risk-layer', type: 'raster', source: 'risk', layout: { visibility: 'none' },
+        paint: { 'raster-opacity': 0.7 } },
+      { id: 'inund-layer', type: 'raster', source: 'inund_1', layout: { visibility: 'none' },
+        paint: { 'raster-opacity': 0.75 } },
+      { id: 'hillshade-layer', type: 'hillshade', source: 'terrain_rgb', layout: { visibility: 'none' },
+        paint: { 'hillshade-illumination-direction': 315, 'hillshade-exaggeration': 0.7 } },
+      { id: 'buildings-layer', type: 'fill-extrusion', source: 'buildings', layout: { visibility: 'visible' },
+        paint: {
+          'fill-extrusion-color': ['case', ['has', 'levels'], '#cbd5e1', '#94a3b8'],
+          'fill-extrusion-height': ['coalesce', ['get', 'height'], ['*', ['coalesce', ['get', 'levels'], 1], 3], 3],
+          'fill-extrusion-base': 0,
+          'fill-extrusion-opacity': 0.85,
+        } },
+    ],
+  },
+  center: [101.45, 0.53],
+  zoom: 12.2,
+  maxZoom: 18,
+  minZoom: 7,
+  maxBounds: [[101.15, 0.28], [101.78, 0.83]],
+  pitch: 0,
+});
+
+// ---------- 3D toggle ----------
+let is3D = false, exag = 4.0;
+function toggle2D3D() {
+  is3D = !is3D;
+  document.getElementById('btn3d').classList.toggle('active', is3D);
+  if (is3D) {
+    map.setTerrain({ source: 'terrain_rgb', exaggeration: exag });
+    map.easeTo({ pitch: 60, duration: 600 });
+    map.setLayoutProperty('hillshade-layer', 'visibility', 'visible');
+  } else {
+    map.setTerrain(null);
+    map.easeTo({ pitch: 0, duration: 600 });
+    map.setLayoutProperty('hillshade-layer', 'visibility', 'none');
+  }
+}
+
+// ---------- Basemap ----------
+document.getElementById('basemapRow').addEventListener('click', (e) => {
+  const btn = e.target.closest('button'); if (!btn) return;
+  document.querySelectorAll('#basemapRow button').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  map.getSource('basemap').updateImage ? null : null;
+  map.getSource('basemap').tiles = [BASEMAPS[btn.dataset.bm]];
+  map.getSource('basemap').setTiles ? map.getSource('basemap').setTiles([BASEMAPS[btn.dataset.bm]]) : null;
+  if (map.getSource('basemap').setTiles) { /* maplibre supports setTiles on raster source */ }
+  refreshBasemap(BASEMAPS[btn.dataset.bm]);
+});
+function refreshBasemap(url) {
+  map.removeSource('basemap');
+  map.addSource('basemap', { type: 'raster', tiles: [url], tileSize: 256, attribution: '© OSM · CartoDB' });
+  map.addLayer({ id: 'basemap-layer', type: 'raster', source: 'basemap' }, 'boundary-line');
+}
+
+// ---------- Layer toggles ----------
+const CHK = {
+  dem: () => setVis('dem-layer', document.getElementById('chkDem').checked),
+  contour: () => setVis('contour-layer', document.getElementById('chkContour').checked),
+  facc: () => { setVis('facc-layer', document.getElementById('chkFacc').checked); updateLegend(); },
+  streams: () => setVis('dem-layer', document.getElementById('chkStreams').checked),
+  sink: () => { setVis('sinkdiff-layer', document.getElementById('chkSink').checked); updateLegend(); },
+  risk: () => {
+    setVis('risk-layer', document.getElementById('chkRisk').checked);
+    document.getElementById('riskLegend').style.display = document.getElementById('chkRisk').checked ? 'grid' : 'none';
+    updateLegend();
+  },
+  inund: () => {
+    const on = document.getElementById('chkInund').checked;
+    document.getElementById('inundControls').style.display = on ? 'block' : 'none';
+    if (on) updateInund();
+    else setVis('inund-layer', false);
+    updateLegend();
+  },
+  buildings: () => setVis('buildings-layer', document.getElementById('chkBuildings').checked),
+  catch: () => { setVis('catchment-fill', document.getElementById('chkCatch').checked); setVis('catchment-line', document.getElementById('chkCatch').checked); },
+  boundary: () => { setVis('boundary-line', document.getElementById('chkBoundary').checked); setVis('boundary-fill', document.getElementById('chkBoundary').checked); },
+  rain: toggleRain,
+};
+function setVis(id, on) {
+  if (!map.getLayer(id)) return;
+  map.setLayoutProperty(id, 'visibility', on ? 'visible' : 'none');
+}
+['chkDem','chkContour','chkFacc','chkStreams','chkSink','chkRisk','chkInund','chkBuildings','chkCatch','chkBoundary','chkRain'].forEach(id => {
+  document.getElementById(id).addEventListener('change', CHK[id]);
+});
+
+// Contour interval buttons (PMTiles per interval: only 5m built in this pass;
+// 1m/10m fall back to 5m if archive missing)
+document.getElementById('contourRow').addEventListener('click', (e) => {
+  const btn = e.target.closest('button'); if (!btn) return;
+  document.querySelectorAll('#contourRow button').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  const c = btn.dataset.c;
+  map.getSource('contours').setUrl(T.contours[c]);
+});
+
+// Inundation slider
+const INUND_MM = [50, 100, 200, 400];
+function updateInund() {
+  const i = +document.getElementById('inundSlider').value;
+  document.getElementById('inundLabel').textContent = INUND_MM[i] + ' mm';
+  for (let k = 0; k < 4; k++) {
+    const src = 'inund_' + k;
+    const cur = map.getSource(src).tiles ? map.getSource(src).tiles[0] : '';
+  }
+  // swap source url
+  const src = map.getSource('inund_'+i);
+  const el = map.getStyle().sources['inund-layer-source'] ? null : null;
+  map.removeLayer('inund-layer');
+  map.removeSource('inund_' + i + '_act');
+  map.addSource('inund_act', { type: 'raster', url: T.inund[i], tileSize: 256 });
+  map.addLayer({ id: 'inund-layer', type: 'raster', source: 'inund_act',
+    layout: { visibility: 'visible' }, paint: { 'raster-opacity': 0.75 } });
+  updateLegend();
+}
+document.getElementById('inundSlider').addEventListener('input', () => {
+  if (document.getElementById('chkInund').checked) updateInund();
+});
+
+// ---------- Rain radar (direct RainViewer, no server) ----------
+let weatherFrames = [], frameIdx = 0, animTimer = null, isPlaying = false;
+function toggleRain() {
+  const on = document.getElementById('chkRain').checked;
+  document.getElementById('rainControls').style.display = on ? 'block' : 'none';
+  updateLegend();
+  if (on) loadWeather(); else { stopAnim(); hideRainLayer(); }
+}
+function hideRainLayer() {
+  if (map.getLayer('rain-layer')) map.setLayoutProperty('rain-layer', 'visibility', 'none');
+}
+function loadWeather() {
+  fetch('https://api.rainviewer.com/public/weather-maps.json')
+    .then(r => r.json())
+    .then(data => {
+      const showForecast = document.getElementById('chkForecast').checked;
+      weatherFrames = (data.radar.past || []).concat(showForecast ? (data.radar.nowcast || []) : []);
+      document.getElementById('rainSlider').max = Math.max(0, weatherFrames.length - 1);
+      frameIdx = weatherFrames.length - 1;
+      document.getElementById('rainSlider').value = frameIdx;
+      showFrame(frameIdx);
+    })
+    .catch(() => console.log('RainViewer gagal (CORS/offline)'));
+}
+function showFrame(i) {
+  if (!weatherFrames.length) return;
+  frameIdx = i;
+  const host = 'https://tilecache.rainviewer.com';
+  const path = weatherFrames[i].path;
+  const url = host + path + '/256/{z}/{x}/{y}/2/1_1.png';
+  if (!map.getSource('rain')) {
+    map.addSource('rain', { type: 'raster', tiles: [url], tileSize: 256, maxzoom: 7 });
+    map.addLayer({ id: 'rain-layer', type: 'raster', source: 'rain', layout: { visibility: 'visible' },
+      paint: { 'raster-opacity': 0.55 } });
+  } else {
+    map.getSource('rain').setTiles([url]);
+    map.setLayoutProperty('rain-layer', 'visibility', 'visible');
+  }
+  const d = new Date(weatherFrames[i].time * 1000);
+  document.getElementById('rainTime').textContent = d.toLocaleTimeString('id-ID', {hour:'2-digit',minute:'2-digit'});
+}
+document.getElementById('btnPlay').addEventListener('click', () => {
+  if (isPlaying) { stopAnim(); document.getElementById('btnPlay').textContent = '▶ Putar'; }
+  else {
+    isPlaying = true;
+    document.getElementById('btnPlay').textContent = '⏸ Jeda';
+    animTimer = setInterval(() => {
+      frameIdx = (frameIdx + 1) % weatherFrames.length;
+      showFrame(frameIdx);
+      document.getElementById('rainSlider').value = frameIdx;
+    }, 350);
+  }
+});
+document.getElementById('rainSlider').addEventListener('input', (e) => showFrame(+e.target.value));
+function stopAnim() { isPlaying = false; clearInterval(animTimer); }
+
+// ---------- Click info (samples.geojson, no server) ----------
+let samples = null;
+fetch('samples.geojson').then(r => r.json()).then(d => { samples = d.features; }).catch(() => {});
+function haversineKm(lat1, lon1, lat2, lon2) {
+  const R = 6371, dLat = (lat2-lat1)*Math.PI/180, dLon = (lon2-lon1)*Math.PI/180;
+  const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLon/2)**2;
+  return 2*R*Math.asin(Math.sqrt(a));
+}
+map.on('click', (e) => {
+  if (!samples) { return; }
+  const lng = e.lngLat.lng, lat = e.lngLat.lat;
+  let best = null, bestD = 1e9;
+  for (const f of samples) {
+    const d = haversineKm(lat, lng, f.geometry.coordinates[1], f.geometry.coordinates[0]);
+    if (d < bestD) { bestD = d; best = f; }
+  }
+  if (!best || bestD > 0.7) { return; }
+  const p = best.properties;
+  document.getElementById('infoPanel').style.display = 'block';
+  let h = `<div class="row"><span class="label">Koordinat</span><span class="value">${lat.toFixed(5)}, ${lng.toFixed(5)}</span></div>`;
+  if (p.elev != null) h += `<div class="row"><span class="label">Elevasi</span><span class="value">${p.elev} m</span></div>`;
+  h += `<div class="row"><span class="label">Akumulasi Aliran</span><span class="value">${p.facc} sel</span></div>`;
+  if (p.sink > 0) h += `<div class="row"><span class="label">Cekungan</span><span class="value">${p.sink} m</span></div>`;
+  h += `<div class="zone-badge" style="background:${p.color};">Status: ${p.zone}</div>`;
+  h += `<div class="rekom"><strong>Analisis:</strong><br>${p.rekom}</div>`;
+  document.getElementById('infoContent').innerHTML = h;
+});
+
+// ---------- Legend ----------
+function updateLegend() {
+  const box = document.getElementById('legendBox');
+  const body = document.getElementById('legendBody');
+  let html = '';
+  if (document.getElementById('chkFacc').checked)
+    html += `<div class="legend-item"><h4>Aliran Air Hujan</h4><div class="legend-bar" style="background:linear-gradient(to right,#dbeafe,#60a5fa,#2563eb,#1e3a8a)"></div><div class="legend-labels"><span>Rendah</span><span>Tinggi</span></div></div>`;
+  if (document.getElementById('chkSink').checked)
+    html += `<div class="legend-item"><h4>Kedalaman Genangan</h4><div class="legend-bar" style="background:linear-gradient(to right,#fee2e2,#f87171,#dc2626,#7f1d1d)"></div><div class="legend-labels"><span>Dangkal</span><span>Dalam</span></div></div>`;
+  if (document.getElementById('chkInund').checked)
+    html += `<div class="legend-item"><h4>Simulasi (${INUND_MM[+document.getElementById('inundSlider').value]}mm)</h4><div style="height:8px;border-radius:4px;background:rgba(59,130,246,.6);"></div><div class="legend-labels"><span>Cekungan tergenang</span></div></div>`;
+  if (document.getElementById('chkRain').checked)
+    html += `<div class="legend-item"><h4>Intensitas Hujan (dBZ)</h4><div class="legend-bar" style="background:linear-gradient(to right,#bbf7d0,#4ade80,#facc15,#f97316,#ef4444,#7f1d1d)"></div><div class="legend-labels"><span>Ringan</span><span>Ekstrem</span></div></div>`;
+  if (html) { box.style.display = 'block'; body.innerHTML = html; } else { box.style.display = 'none'; }
+}
+updateLegend();
+
+// Weather alert banner (static: only freshness of cache is N/A; keep subtle note)
+setTimeout(() => {
+  const b = document.getElementById('alertBanner');
+  b.style.display = 'block';
+  b.style.cssText = 'display:block;background:rgba(16,185,129,.15);border:1px solid rgba(16,185,129,.3);color:#6ee7b7;';
+  b.innerHTML = '✔ Mode statis — semua tile PMTiles dimuat lokal. Deploy: GitHub Pages.';
+}, 1500);
+</script>
+</body>
+</html>
