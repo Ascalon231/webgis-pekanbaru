@@ -133,7 +133,6 @@ input[type=range] { width:100%; accent-color:var(--accent); margin:8px 0 4px; }
   <div class="section">
     <h4>Analisis Banjir</h4>
     <label><input type="checkbox" id="chkFacc" checked> Akumulasi Aliran</label>
-    <label><input type="checkbox" id="chkStreams" checked> Jaringan Sungai</label>
     <label><input type="checkbox" id="chkSink"> Potensi Genangan</label>
     <label><input type="checkbox" id="chkRisk"> Zona Risiko Banjir</label>
     <div class="legend-grid" id="riskLegend" style="display:none;">
@@ -226,22 +225,22 @@ const map = new maplibregl.Map({
       boundary: { type: 'vector', url: T.boundary },
       catchment: { type: 'vector', url: T.catchment },
       buildings: { type: 'vector', url: T.buildings },
-      streams: { type: 'vector', url: T.streams },
-      contours: { type: 'vector', url: T.contours['5m'] },
+      contours_5m: { type: 'vector', url: T.contours['5m'] },
+      contours_10m: { type: 'vector', url: T.contours['10m'] },
     },
     layers: [
       { id: 'basemap-layer', type: 'raster', source: 'basemap' },
-      { id: 'boundary-line', type: 'line', source: 'boundary', layout: { visibility: 'visible' },
+      { id: 'boundary-line', type: 'line', source: 'boundary', 'source-layer': 'boundary', layout: { visibility: 'visible' },
         paint: { 'line-color': '#34d399', 'line-width': 2, 'line-opacity': 0.55 } },
-      { id: 'boundary-fill', type: 'fill', source: 'boundary', layout: { visibility: 'visible' },
+      { id: 'boundary-fill', type: 'fill', source: 'boundary', 'source-layer': 'boundary', layout: { visibility: 'visible' },
         paint: { 'fill-color': '#34d399', 'fill-opacity': 0.04 } },
-      { id: 'catchment-fill', type: 'fill', source: 'catchment', layout: { visibility: 'none' },
+      { id: 'catchment-fill', type: 'fill', source: 'catchment', 'source-layer': 'catchment', layout: { visibility: 'none' },
         paint: { 'fill-color': '#10b981', 'fill-opacity': 0.12 } },
-      { id: 'catchment-line', type: 'line', source: 'catchment', layout: { visibility: 'none' },
+      { id: 'catchment-line', type: 'line', source: 'catchment', 'source-layer': 'catchment', layout: { visibility: 'none' },
         paint: { 'line-color': '#10b981', 'line-width': 2, 'line-opacity': 0.7 } },
       { id: 'dem-layer', type: 'raster', source: 'dem_color', layout: { visibility: 'visible' },
         paint: { 'raster-opacity': 0.72 } },
-      { id: 'contour-layer', type: 'line', source: 'contours', layout: { visibility: 'visible' },
+      { id: 'contour-layer', type: 'line', source: 'contours_5m', 'source-layer': 'contours_5m', layout: { visibility: 'visible' },
         paint: {
           'line-color': ['case', ['==', ['%', ['get', 'elev'], 25], 0], '#5c3a1e', '#a67b5b'],
           'line-width': ['case', ['==', ['%', ['get', 'elev'], 25], 0], 1.6, 0.8],
@@ -257,7 +256,7 @@ const map = new maplibregl.Map({
         paint: { 'raster-opacity': 0.75 } },
       { id: 'hillshade-layer', type: 'hillshade', source: 'terrain_rgb', layout: { visibility: 'none' },
         paint: { 'hillshade-illumination-direction': 315, 'hillshade-exaggeration': 0.7 } },
-      { id: 'buildings-layer', type: 'fill-extrusion', source: 'buildings', layout: { visibility: 'visible' },
+      { id: 'buildings-layer', type: 'fill-extrusion', source: 'buildings', 'source-layer': 'buildings', layout: { visibility: 'visible' },
         paint: {
           'fill-extrusion-color': ['case', ['has', 'levels'], '#cbd5e1', '#94a3b8'],
           'fill-extrusion-height': ['coalesce', ['get', 'height'], ['*', ['coalesce', ['get', 'levels'], 1], 3], 3],
@@ -312,7 +311,6 @@ const CHK = {
   dem: () => setVis('dem-layer', document.getElementById('chkDem').checked),
   contour: () => setVis('contour-layer', document.getElementById('chkContour').checked),
   facc: () => { setVis('facc-layer', document.getElementById('chkFacc').checked); updateLegend(); },
-  streams: () => setVis('dem-layer', document.getElementById('chkStreams').checked),
   sink: () => { setVis('sinkdiff-layer', document.getElementById('chkSink').checked); updateLegend(); },
   risk: () => {
     setVis('risk-layer', document.getElementById('chkRisk').checked);
@@ -335,7 +333,7 @@ function setVis(id, on) {
   if (!map.getLayer(id)) return;
   map.setLayoutProperty(id, 'visibility', on ? 'visible' : 'none');
 }
-['chkDem','chkContour','chkFacc','chkStreams','chkSink','chkRisk','chkInund','chkBuildings','chkCatch','chkBoundary','chkRain'].forEach(id => {
+['chkDem','chkContour','chkFacc','chkSink','chkRisk','chkInund','chkBuildings','chkCatch','chkBoundary','chkRain'].forEach(id => {
   document.getElementById(id).addEventListener('change', CHK[id]);
 });
 
@@ -346,7 +344,7 @@ document.getElementById('contourRow').addEventListener('click', (e) => {
   document.querySelectorAll('#contourRow button').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
   const c = btn.dataset.c;
-  map.getSource('contours').setUrl(T.contours[c]);
+  map.getSource(c === '10m' ? 'contours_10m' : 'contours_5m').setUrl(T.contours[c]);
 });
 
 // Inundation slider
